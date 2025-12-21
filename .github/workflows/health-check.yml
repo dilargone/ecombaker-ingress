@@ -1,0 +1,181 @@
+name: Certificate Check
+
+on:
+  schedule:
+    # Run every day at 2 AM UTC
+    - cron: '0 2 * * *'
+  
+  workflow_dispatch:
+
+jobs:
+  check-certificates:
+    name: Check SSL Certificate Expiry
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, qa, prod]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl for ${{ matrix.environment }}
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets[format('KUBE_CONFIG_{0}', upper(matrix.environment))] }}
+      
+      - name: Check certificate status
+        id: cert-check
+        run: |
+          CERT_NAME="ecombaker-tls-secret"
+          if [ "${{ matrix.environment }}" != "prod" ]; then
+            CERT_NAME="ecombaker-${{ matrix.environment }}-tls-secret"
+          fi
+          
+          echo "Checking certificate: $CERT_NAME"
+          
+          # Check if certificate exists
+          if ! kubectl get certificate $CERT_NAME &> /dev/null; then
+            echo "❌ Certificate $CERT_NAME not found!"
+            echo "cert_status=missing" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Get certificate status
+          READY_STATUS=$(kubectl get certificate $CERT_NAME -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+          
+          if [ "$READY_STATUS" == "True" ]; then
+            echo "✅ Certificate is ready"
+            echo "cert_status=ready" >> $GITHUB_OUTPUT
+            
+            # Get expiry date
+            EXPIRY=$(kubectl get secret $CERT_NAME -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -enddate | cut -d= -f2)
+            echo "Certificate expires: $EXPIRY"
+            echo "cert_expiry=$EXPIRY" >> $GITHUB_OUTPUT
+            
+            # Calculate days until expiry
+            EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+            NOW_EPOCH=$(date +%s)
+            DAYS_LEFT=$(( ($EXPIRY_EPOCH - $NOW_EPOCH) / 86400 ))
+            echo "Days until expiry: $DAYS_LEFT"
+            echo "days_left=$DAYS_LEFT" >> $GITHUB_OUTPUT
+            
+            if [ $DAYS_LEFT -lt 30 ]; then
+              echo "⚠️ Certificate expires in less than 30 days!"
+              echo "warning=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Certificate is not ready"
+            echo "cert_status=not_ready" >> $GITHUB_OUTPUT
+            kubectl describe certificate $CERT_NAME
+          fi
+      
+      - name: Create issue if certificate problem
+        if: steps.cert-check.outputs.cert_status == 'not_ready' || steps.cert-check.outputs.warning == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ steps.cert-check.outputs.cert_status }}';
+            const daysLeft = '${{ steps.cert-check.outputs.days_left }}';
+            const env = '${{ matrix.environment }}';
+            
+            let title, body;
+            
+            if (status === 'not_ready') {
+              title = `🚨 SSL Certificate Not Ready - ${env.toUpperCase()}`;
+              body = `## Certificate Issue Detected
+              
+              **Environment:** ${env}
+              **Status:** Certificate not ready
+              **Action Required:** Investigate cert-manager logs and certificate status
+              
+              ### Debugging Steps
+              \`\`\`bash
+              kubectl describe certificate ecombaker-tls-secret
+              kubectl logs -n cert-manager -l app=cert-manager --tail=100
+              kubectl get certificaterequest
+              kubectl get order
+              kubectl get challenge
+              \`\`\`
+              `;
+            } else {
+              title = `⚠️ SSL Certificate Expiring Soon - ${env.toUpperCase()}`;
+              body = `## Certificate Expiry Warning
+              
+              **Environment:** ${env}
+              **Days until expiry:** ${daysLeft}
+              **Action Required:** Certificate will be auto-renewed, but monitor the renewal process
+              
+              Cert-manager should automatically renew certificates 30 days before expiry.
+              Monitor the renewal process in cert-manager logs.
+              `;
+            }
+            
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: ['certificate', env]
+            });
+            
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['certificate', env, 'infrastructure']
+              });
+            }
+
+  check-ingress-health:
+    name: Check Ingress Health
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, qa, prod]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl for ${{ matrix.environment }}
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets[format('KUBE_CONFIG_{0}', upper(matrix.environment))] }}
+      
+      - name: Check ingress status
+        run: |
+          echo "Checking ingress status in ${{ matrix.environment }}"
+          kubectl get ingress ecombaker-ingress -o wide
+          
+          # Check if ingress has address
+          ADDRESS=$(kubectl get ingress ecombaker-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          if [ -z "$ADDRESS" ]; then
+            ADDRESS=$(kubectl get ingress ecombaker-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          fi
+          
+          if [ -z "$ADDRESS" ]; then
+            echo "❌ Ingress has no external address!"
+            exit 1
+          else
+            echo "✅ Ingress address: $ADDRESS"
+          fi
+      
+      - name: Check ingress controller
+        run: |
+          echo "Checking NGINX ingress controller"
+          kubectl get pods -n ingress-nginx
+          kubectl get svc -n ingress-nginx ingress-nginx-controller
+          
+          # Check if controller is running
+          READY=$(kubectl get deployment -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.readyReplicas}')
+          DESIRED=$(kubectl get deployment -n ingress-nginx ingress-nginx-controller -o jsonpath='{.spec.replicas}')
+          
+          if [ "$READY" != "$DESIRED" ]; then
+            echo "⚠️ Ingress controller: $READY/$DESIRED replicas ready"
+            exit 1
+          else
+            echo "✅ Ingress controller: $READY/$DESIRED replicas ready"
+          fi

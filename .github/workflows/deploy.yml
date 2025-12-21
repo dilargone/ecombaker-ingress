@@ -1,0 +1,226 @@
+name: Deploy Ingress
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'base/**'
+      - 'overlays/**'
+      - '.github/workflows/deploy.yml'
+  
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'base/**'
+      - 'overlays/**'
+  
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+        default: 'dev'
+
+jobs:
+  validate:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+      
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+      
+      - name: Validate base manifests
+        run: |
+          kubectl apply --dry-run=client -k base/
+      
+      - name: Validate dev overlay
+        run: |
+          kubectl apply --dry-run=client -k overlays/dev/
+      
+      - name: Validate qa overlay
+        run: |
+          kubectl apply --dry-run=client -k overlays/qa/
+      
+      - name: Validate prod overlay
+        run: |
+          kubectl apply --dry-run=client -k overlays/prod/
+      
+      - name: Run kubeval (YAML validation)
+        run: |
+          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          tar xf kubeval-linux-amd64.tar.gz
+          sudo mv kubeval /usr/local/bin
+          kustomize build base/ | kubeval --strict
+          kustomize build overlays/dev/ | kubeval --strict
+          kustomize build overlays/qa/ | kubeval --strict
+          kustomize build overlays/prod/ | kubeval --strict
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: development
+      url: https://dev.ecombaker.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_DEV }}
+      
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+      
+      - name: Deploy to dev
+        run: |
+          kubectl apply -k overlays/dev/
+      
+      - name: Wait for ingress
+        run: |
+          kubectl wait --for=condition=Ready --timeout=300s ingress/ecombaker-ingress || true
+      
+      - name: Get ingress status
+        run: |
+          kubectl get ingress ecombaker-ingress -o wide
+      
+      - name: Verify deployment
+        run: |
+          chmod +x scripts/verify.sh
+          ./scripts/verify.sh dev || true
+
+  deploy-qa:
+    name: Deploy to QA
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event.inputs.environment == 'qa' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    environment:
+      name: qa
+      url: https://qa.ecombaker.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_QA }}
+      
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+      
+      - name: Deploy to QA
+        run: |
+          kubectl apply -k overlays/qa/
+      
+      - name: Wait for ingress
+        run: |
+          kubectl wait --for=condition=Ready --timeout=300s ingress/ecombaker-ingress || true
+      
+      - name: Get ingress status
+        run: |
+          kubectl get ingress ecombaker-ingress -o wide
+      
+      - name: Verify deployment
+        run: |
+          chmod +x scripts/verify.sh
+          ./scripts/verify.sh qa || true
+      
+      - name: Notify QA team
+        if: success()
+        run: |
+          echo "QA deployment successful!"
+          # Add Slack/email notification here
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [validate, deploy-qa]
+    if: github.event.inputs.environment == 'prod'
+    environment:
+      name: production
+      url: https://ecombaker.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PROD }}
+      
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+      
+      - name: Create backup
+        run: |
+          kubectl get ingress ecombaker-ingress -o yaml > backup-$(date +%Y%m%d-%H%M%S).yaml
+      
+      - name: Deploy to Production
+        run: |
+          kubectl apply -k overlays/prod/
+      
+      - name: Wait for ingress
+        run: |
+          kubectl wait --for=condition=Ready --timeout=300s ingress/ecombaker-ingress
+      
+      - name: Get ingress status
+        run: |
+          kubectl get ingress ecombaker-ingress -o wide
+      
+      - name: Verify deployment
+        run: |
+          chmod +x scripts/verify.sh
+          ./scripts/verify.sh prod
+      
+      - name: Check certificate status
+        run: |
+          kubectl get certificate
+          kubectl describe certificate ecombaker-tls-secret
+      
+      - name: Smoke test
+        run: |
+          EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Testing health endpoint..."
+          curl -f -H "Host: store1.ecombaker.com" https://$EXTERNAL_IP/actuator/health || exit 1
+      
+      - name: Notify team
+        if: success()
+        run: |
+          echo "Production deployment successful!"
+          # Add Slack/email notification here
+      
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed, rolling back..."
+          kubectl rollout undo ingress ecombaker-ingress

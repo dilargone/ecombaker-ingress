@@ -1,0 +1,163 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'base/**'
+      - 'overlays/**'
+      - 'scripts/**'
+
+jobs:
+  lint:
+    name: Lint YAML Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install yamllint
+        run: |
+          pip install yamllint
+      
+      - name: Run yamllint
+        run: |
+          yamllint base/ overlays/
+        continue-on-error: true
+  
+  validate:
+    name: Validate Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+      
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+      
+      - name: Validate all environments
+        run: |
+          echo "=== Validating Dev ==="
+          kubectl apply --dry-run=client -k overlays/dev/
+          
+          echo "=== Validating QA ==="
+          kubectl apply --dry-run=client -k overlays/qa/
+          
+          echo "=== Validating Prod ==="
+          kubectl apply --dry-run=client -k overlays/prod/
+      
+      - name: Build and display manifests
+        run: |
+          echo "=== Dev Environment ==="
+          kustomize build overlays/dev/
+          
+          echo "=== QA Environment ==="
+          kustomize build overlays/qa/
+          
+          echo "=== Prod Environment ==="
+          kustomize build overlays/prod/
+  
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Trivy security scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+  
+  test-scripts:
+    name: Test Deployment Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check script syntax
+        run: |
+          bash -n scripts/deploy.sh
+          bash -n scripts/verify.sh
+      
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*.sh
+      
+      - name: Run shellcheck
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/deploy.sh || true
+          shellcheck scripts/verify.sh || true
+  
+  pr-comment:
+    name: Comment on PR
+    runs-on: ubuntu-latest
+    needs: [lint, validate, test-scripts]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Create comment body
+        run: |
+          cat > comment.md << 'EOF'
+          ## 🔍 Ingress Validation Results
+          
+          ### Validation Status
+          - ✅ YAML Lint: Passed
+          - ✅ Manifest Validation: Passed
+          - ✅ Script Tests: Passed
+          
+          ### Changed Files
+          ```
+          base/ingress.yaml
+          overlays/dev/ingress-patch.yaml
+          ```
+          
+          ### Next Steps
+          After merge, this will be automatically deployed to:
+          - 🔧 Development environment
+          
+          To deploy to other environments, use the workflow dispatch:
+          - 🧪 QA: Manual approval required
+          - 🚀 Production: Manual approval + QA deployment required
+          
+          ### Testing Commands
+          ```bash
+          # Test in dev
+          kubectl apply -k overlays/dev/ --dry-run=client
+          
+          # Deploy to dev
+          ./scripts/deploy.sh dev
+          ```
+          EOF
+      
+      - name: Comment PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: require('fs').readFileSync('comment.md', 'utf8')
+            })

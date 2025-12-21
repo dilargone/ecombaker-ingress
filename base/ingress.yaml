@@ -1,0 +1,102 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecombaker-ingress
+  namespace: default
+  annotations:
+    # Enable SSL/TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Force HTTPS redirect
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Enable CORS for API endpoints
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://*.ecombaker.com"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    # Larger body size for file uploads
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # WebSocket support
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # Connection limits
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - "*.ecombaker.com"
+    - ecombaker.com
+    secretName: ecombaker-tls-secret
+  rules:
+  # Wildcard rule for all subdomains - API and App traffic
+  - host: "*.ecombaker.com"
+    http:
+      paths:
+      # API endpoints - route to backend service
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      # App/Frontend traffic - route to frontend service
+      - path: /app
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-frontend-service
+            port:
+              number: 80
+      # Actuator endpoints (health checks, metrics)
+      - path: /actuator
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      # Swagger/OpenAPI documentation
+      - path: /swagger-ui
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      - path: /v3/api-docs
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+  
+  # Base domain rule (for www or root domain)
+  - host: ecombaker.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      - path: /app
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-frontend-service
+            port:
+              number: 80
+      # Default root path - redirect to app
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-frontend-service
+            port:
+              number: 80

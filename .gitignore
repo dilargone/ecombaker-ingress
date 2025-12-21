@@ -1,0 +1,35 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kubernetes
+*.kubeconfig
+kubeconfig
+.kube/
+
+# Secrets (never commit these!)
+*.key
+*.pem
+*-secret.yaml
+secrets/
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# Terraform (if used for infrastructure)
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Environment specific
+.env
+.env.*
