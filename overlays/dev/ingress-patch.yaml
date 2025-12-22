@@ -3,17 +3,19 @@ kind: Ingress
 metadata:
   name: ecombaker-ingress
   annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+    # SSL/TLS disabled for now - will be configured later
+    # cert-manager.io/cluster-issuer: "letsencrypt-staging"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
     nginx.ingress.kubernetes.io/limit-rps: ""  # Remove rate limiting in dev
     nginx.ingress.kubernetes.io/configuration-snippet: |
       add_header X-Environment "development" always;
 spec:
-  tls:
-  - hosts:
-    - "*.dev.ecombaker.com"
-    - dev.ecombaker.com
-    secretName: ecombaker-dev-tls-secret
+  # TLS disabled for now
+  # tls:
+  # - hosts:
+  #   - "*.dev.ecombaker.com"
+  #   - dev.ecombaker.com
+  #   secretName: ecombaker-dev-tls-secret
   rules:
   - host: "*.dev.ecombaker.com"
     http:

@@ -4,14 +4,13 @@ metadata:
   name: ecombaker-ingress
   namespace: default
   annotations:
-    # Enable SSL/TLS
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    # Force HTTPS redirect
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # SSL/TLS disabled for now - will be configured later
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     # Enable CORS for API endpoints
     nginx.ingress.kubernetes.io/enable-cors: "true"
     nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-    nginx.ingress.kubernetes.io/cors-allow-origin: "https://*.ecombaker.com"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "http://*.ecombaker.com"
     nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
     # Larger body size for file uploads
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
@@ -24,11 +23,12 @@ metadata:
     nginx.ingress.kubernetes.io/limit-connections: "50"
 spec:
   ingressClassName: nginx
-  tls:
-  - hosts:
-    - "*.ecombaker.com"
-    - ecombaker.com
-    secretName: ecombaker-tls-secret
+  # TLS disabled for now - will be configured later
+  # tls:
+  # - hosts:
+  #   - "*.ecombaker.com"
+  #   - ecombaker.com
+  #   secretName: ecombaker-tls-secret
   rules:
   # Wildcard rule for all subdomains - API and App traffic
   - host: "*.ecombaker.com"

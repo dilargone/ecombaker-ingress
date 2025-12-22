@@ -3,17 +3,19 @@ kind: Ingress
 metadata:
   name: ecombaker-ingress
   annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/cors-allow-origin: "https://*.qa.ecombaker.com"
+    # SSL/TLS disabled for now - will be configured later
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "http://*.qa.ecombaker.com"
     nginx.ingress.kubernetes.io/limit-rps: "200"
     nginx.ingress.kubernetes.io/configuration-snippet: |
       add_header X-Environment "qa" always;
 spec:
-  tls:
-  - hosts:
-    - "*.qa.ecombaker.com"
-    - qa.ecombaker.com
-    secretName: ecombaker-qa-tls-secret
+  # TLS disabled for now
+  # tls:
+  # - hosts:
+  #   - "*.qa.ecombaker.com"
+  #   - qa.ecombaker.com
+  #   secretName: ecombaker-qa-tls-secret
   rules:
   - host: "*.qa.ecombaker.com"
     http:

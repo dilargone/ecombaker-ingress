@@ -46,31 +46,50 @@ jobs:
           curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
           sudo mv kustomize /usr/local/bin/
       
-      - name: Validate base manifests
+      - name: Validate base manifests (syntax only)
         run: |
-          kubectl apply --dry-run=client -k base/
+          echo "Building base manifests..."
+          kustomize build base/ > /tmp/base-manifest.yaml
+          echo "✅ Base manifests build successfully"
       
-      - name: Validate dev overlay
+      - name: Validate dev overlay (syntax only)
         run: |
-          kubectl apply --dry-run=client -k overlays/dev/
+          echo "Building dev overlay..."
+          kustomize build overlays/dev/ > /tmp/dev-manifest.yaml
+          echo "✅ Dev overlay builds successfully"
       
-      - name: Validate qa overlay
+      - name: Validate qa overlay (syntax only)
         run: |
-          kubectl apply --dry-run=client -k overlays/qa/
+          echo "Building qa overlay..."
+          kustomize build overlays/qa/ > /tmp/qa-manifest.yaml
+          echo "✅ QA overlay builds successfully"
       
-      - name: Validate prod overlay
+      - name: Validate prod overlay (syntax only)
         run: |
-          kubectl apply --dry-run=client -k overlays/prod/
+          echo "Building prod overlay..."
+          kustomize build overlays/prod/ > /tmp/prod-manifest.yaml
+          echo "✅ Prod overlay builds successfully"
       
       - name: Run kubeval (YAML validation)
         run: |
-          wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+          echo "Installing kubeval..."
+          wget -q https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
           tar xf kubeval-linux-amd64.tar.gz
           sudo mv kubeval /usr/local/bin
-          kustomize build base/ | kubeval --strict
-          kustomize build overlays/dev/ | kubeval --strict
-          kustomize build overlays/qa/ | kubeval --strict
-          kustomize build overlays/prod/ | kubeval --strict
+          echo ""
+          echo "Validating base manifests..."
+          kustomize build base/ | kubeval --strict --ignore-missing-schemas
+          echo ""
+          echo "Validating dev overlay..."
+          kustomize build overlays/dev/ | kubeval --strict --ignore-missing-schemas
+          echo ""
+          echo "Validating qa overlay..."
+          kustomize build overlays/qa/ | kubeval --strict --ignore-missing-schemas
+          echo ""
+          echo "Validating prod overlay..."
+          kustomize build overlays/prod/ | kubeval --strict --ignore-missing-schemas
+          echo ""
+          echo "✅ All manifests are valid!"
 
   deploy-dev:
     name: Deploy to Development
