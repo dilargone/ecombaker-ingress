@@ -3,8 +3,10 @@ kind: Kustomization
 
 namespace: default
 
-bases:
+resources:
   - ../../base
 
-commonLabels:
-  environment: production
+labels:
+  - pairs:
+      environment: production
+

@@ -5,8 +5,10 @@ namespace: default
 
 resources:
   - ingress.yaml
-  - cluster-issuer.yaml
+  # cluster-issuer.yaml disabled - SSL/TLS not needed for now
 
-commonLabels:
-  app: ecombaker
-  managed-by: kustomize
+labels:
+  - pairs:
+      app: ecombaker
+      managed-by: kustomize
+
