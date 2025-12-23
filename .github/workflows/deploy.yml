@@ -104,10 +104,17 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Configure kubectl
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBE_CONFIG_DEV }}
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          echo "Kubeconfig configured successfully"
+          
+      - name: Verify cluster connection
+        run: |
+          echo "Testing connection to cluster..."
+          kubectl cluster-info || (echo "Failed to connect to cluster" && exit 1)
+          kubectl get nodes || true
       
       - name: Install kustomize
         run: |
@@ -144,10 +151,17 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Configure kubectl
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBE_CONFIG_QA }}
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_QA }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          echo "Kubeconfig configured successfully"
+          
+      - name: Verify cluster connection
+        run: |
+          echo "Testing connection to cluster..."
+          kubectl cluster-info || (echo "Failed to connect to cluster" && exit 1)
+          kubectl get nodes || true
       
       - name: Install kustomize
         run: |
@@ -190,10 +204,17 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Configure kubectl
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBE_CONFIG_PROD }}
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          echo "Kubeconfig configured successfully"
+          
+      - name: Verify cluster connection
+        run: |
+          echo "Testing connection to cluster..."
+          kubectl cluster-info || (echo "Failed to connect to cluster" && exit 1)
+          kubectl get nodes || true
       
       - name: Install kustomize
         run: |
