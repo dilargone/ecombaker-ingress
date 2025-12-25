@@ -138,16 +138,14 @@ jobs:
           echo "Current namespaces:"
           kubectl get namespaces
       
-      - name: Install kustomize
-        run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-      
       - name: Deploy to dev
         run: |
           NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
           echo "Deploying to namespace: $NAMESPACE"
-          kubectl apply -k overlays/dev/ -n "$NAMESPACE"
+          
+          # Build the manifest and apply with namespace override
+          kubectl kustomize overlays/dev/ | kubectl apply -n "$NAMESPACE" -f -
+          
           echo "✅ Ingress deployed successfully to namespace: $NAMESPACE"
       
       - name: Wait for ingress (optional)
@@ -212,16 +210,14 @@ jobs:
           echo "Current namespaces:"
           kubectl get namespaces
       
-      - name: Install kustomize
-        run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-      
       - name: Deploy to QA
         run: |
           NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
           echo "Deploying to namespace: $NAMESPACE"
-          kubectl apply -k overlays/qa/ -n "$NAMESPACE"
+          
+          # Build the manifest and apply with namespace override
+          kubectl kustomize overlays/qa/ | kubectl apply -n "$NAMESPACE" -f -
+          
           echo "✅ Ingress deployed successfully to namespace: $NAMESPACE"
       
       - name: Wait for ingress (optional)
@@ -292,21 +288,14 @@ jobs:
           echo "Current namespaces:"
           kubectl get namespaces
       
-      - name: Install kustomize
-        run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-      
-      - name: Create backup
-        run: |
-          NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
-          kubectl get ingress ecombaker-ingress -n "$NAMESPACE" -o yaml > backup-$(date +%Y%m%d-%H%M%S).yaml 2>/dev/null || echo "No existing ingress to backup"
-      
       - name: Deploy to Production
         run: |
           NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
           echo "Deploying to namespace: $NAMESPACE"
-          kubectl apply -k overlays/prod/ -n "$NAMESPACE"
+          
+          # Build the manifest and apply with namespace override
+          kubectl kustomize overlays/prod/ | kubectl apply -n "$NAMESPACE" -f -
+          
           echo "✅ Ingress deployed successfully to namespace: $NAMESPACE"
       
       - name: Wait for ingress

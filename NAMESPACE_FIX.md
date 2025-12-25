@@ -8,7 +8,8 @@ You must pass '--namespace=default' to perform this operation.
 ```
 
 ## Root Cause
-The namespace was **hardcoded** in multiple places:
+The namespace was **hardcoded** in multiple kustomization files:
+- `base/kustomization.yaml` - had `namespace: default`
 - `base/ingress.yaml` - had `namespace: default` in metadata
 - `overlays/dev/kustomization.yaml` - had `namespace: default`
 - `overlays/qa/kustomization.yaml` - had `namespace: default`
@@ -17,29 +18,40 @@ The namespace was **hardcoded** in multiple places:
 When you specify `-n custom-namespace` with kubectl, it conflicts with the hardcoded namespace in the manifest.
 
 ## Solution
-Removed the hardcoded `namespace: default` from all files:
+1. **Removed hardcoded namespaces** from all 5 files listed above
+2. **Changed deployment approach** in GitHub Actions to properly override namespace:
+   ```bash
+   # OLD (doesn't properly override namespace)
+   kubectl apply -k overlays/qa/ -n custom-namespace
+   
+   # NEW (builds manifest first, then applies with namespace)
+   kubectl kustomize overlays/qa/ | kubectl apply -n custom-namespace -f -
+   ```
 
 ### Files Modified:
-1. ✅ `base/ingress.yaml` - Removed `namespace: default` from metadata
-2. ✅ `overlays/dev/kustomization.yaml` - Removed `namespace: default` field
-3. ✅ `overlays/qa/kustomization.yaml` - Removed `namespace: default` field
-4. ✅ `overlays/prod/kustomization.yaml` - Removed `namespace: default` field
+1. ✅ `base/kustomization.yaml` - Removed `namespace: default` field
+2. ✅ `base/ingress.yaml` - Removed `namespace: default` from metadata
+3. ✅ `overlays/dev/kustomization.yaml` - Removed `namespace: default` field
+4. ✅ `overlays/qa/kustomization.yaml` - Removed `namespace: default` field
+5. ✅ `overlays/prod/kustomization.yaml` - Removed `namespace: default` field
+6. ✅ `.github/workflows/deploy.yml` - Updated deployment commands to use pipe approach
 
 ### How It Works Now:
 ```bash
-# Namespace is specified at deployment time
-kubectl apply -k overlays/qa/ -n my-custom-namespace
+# Build manifest and apply to custom namespace
+kubectl kustomize overlays/qa/ | kubectl apply -n my-custom-namespace -f -
 
-# If no namespace specified, uses current context default
-kubectl apply -k overlays/qa/
+# Build manifest and apply to default namespace
+kubectl kustomize overlays/qa/ | kubectl apply -n default -f -
 ```
 
 ## GitHub Actions Usage
 
 The workflow now correctly:
 1. Creates the namespace if needed
-2. Deploys to that namespace
-3. Checks status in that namespace
+2. Builds the manifest using `kubectl kustomize`
+3. Pipes it to `kubectl apply` with namespace override
+4. Checks status in that namespace
 
 ### Example:
 ```yaml
@@ -49,7 +61,7 @@ workflow_dispatch:
     
 # Deployment will:
 - kubectl create namespace ecombaker-qa-namespace  # If not exists
-- kubectl apply -k overlays/qa/ -n ecombaker-qa-namespace
+- kubectl kustomize overlays/qa/ | kubectl apply -n ecombaker-qa-namespace -f -
 - kubectl get ingress -n ecombaker-qa-namespace
 ```
 
@@ -62,13 +74,19 @@ kubectl kustomize overlays/qa/ | grep "namespace:"
 
 # Deploy to custom namespace
 kubectl create namespace test-namespace
-kubectl apply -k overlays/qa/ -n test-namespace
+kubectl kustomize overlays/qa/ | kubectl apply -n test-namespace -f -
 kubectl get ingress -n test-namespace
 
 # Clean up
 kubectl delete ingress ecombaker-ingress -n test-namespace
 kubectl delete namespace test-namespace
 ```
+
+## Why The Pipe Approach Works
+
+The key difference:
+- `kubectl apply -k PATH -n NAMESPACE` - Kustomize sets namespace, then kubectl tries to override (conflict!)
+- `kubectl kustomize PATH | kubectl apply -n NAMESPACE -f -` - Manifest is built without namespace, then kubectl applies it to specified namespace (no conflict!)
 
 ## Important Notes
 
