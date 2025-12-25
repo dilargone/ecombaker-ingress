@@ -1,0 +1,25 @@
+# ExternalName service to reference pilot-service-qa from default namespace
+apiVersion: v1
+kind: Service
+metadata:
+  name: pilot-service-qa
+  namespace: ecombaker-qa-namespace
+spec:
+  type: ExternalName
+  externalName: pilot-service-qa.default.svc.cluster.local
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+# ExternalName service for frontend (when it exists)
+apiVersion: v1
+kind: Service
+metadata:
+  name: pilot-frontend-service-qa
+  namespace: ecombaker-qa-namespace
+spec:
+  type: ExternalName
+  externalName: pilot-frontend-service-qa.default.svc.cluster.local
+  ports:
+  - port: 80
+    targetPort: 80

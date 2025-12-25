@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - ../../base
+  - external-service.yaml  # ExternalName services for cross-namespace routing
 
 patches:
   - path: ingress-patch.yaml
