@@ -9,6 +9,9 @@ metadata:
     nginx.ingress.kubernetes.io/limit-rps: "200"
     # Configuration snippet disabled - snippets not allowed by ingress controller
     # If you need custom headers, use ConfigMap or enable snippets in controller
+    # Cross-namespace service routing - pilot-service-qa is in default namespace
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/service-upstream: "true"
 spec:
   # TLS disabled for now
   # tls:
@@ -24,35 +27,35 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: pilot-service-qa
+            name: pilot-service-qa.default.svc.cluster.local
             port:
               number: 8080
       - path: /app
         pathType: Prefix
         backend:
           service:
-            name: pilot-frontend-service-qa
+            name: pilot-frontend-service-qa.default.svc.cluster.local
             port:
               number: 80
       - path: /actuator
         pathType: Prefix
         backend:
           service:
-            name: pilot-service-qa
+            name: pilot-service-qa.default.svc.cluster.local
             port:
               number: 8080
       - path: /swagger-ui
         pathType: Prefix
         backend:
           service:
-            name: pilot-service-qa
+            name: pilot-service-qa.default.svc.cluster.local
             port:
               number: 8080
       - path: /v3/api-docs
         pathType: Prefix
         backend:
           service:
-            name: pilot-service-qa
+            name: pilot-service-qa.default.svc.cluster.local
             port:
               number: 8080
   - host: qa.ecombaker.com
@@ -62,20 +65,20 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: pilot-service-qa
+            name: pilot-service-qa.default.svc.cluster.local
             port:
               number: 8080
       - path: /app
         pathType: Prefix
         backend:
           service:
-            name: pilot-frontend-service-qa
+            name: pilot-frontend-service-qa.default.svc.cluster.local
             port:
               number: 80
       - path: /
         pathType: Prefix
         backend:
           service:
-            name: pilot-frontend-service-qa
+            name: pilot-frontend-service-qa.default.svc.cluster.local
             port:
               number: 80
