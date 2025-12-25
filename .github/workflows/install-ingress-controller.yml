@@ -1,0 +1,209 @@
+name: Install NGINX Ingress Controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to install ingress controller'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+        default: 'dev'
+      install_controller:
+        description: 'Install NGINX Ingress Controller (creates LoadBalancer)'
+        required: true
+        type: boolean
+        default: true
+      namespace:
+        description: 'Namespace for ingress controller'
+        required: false
+        type: string
+        default: 'ingress-nginx'
+
+jobs:
+  install-ingress-controller:
+    name: Install NGINX Ingress Controller
+    runs-on: ubuntu-latest
+    if: github.event.inputs.install_controller == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          if [ "${{ github.event.inputs.environment }}" == "dev" ]; then
+            echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "qa" ]; then
+            echo "${{ secrets.KUBE_CONFIG_QA }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "prod" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+          echo "Kubeconfig configured for ${{ github.event.inputs.environment }}"
+      
+      - name: Verify cluster connection
+        run: |
+          echo "Testing connection to cluster..."
+          kubectl cluster-info
+          kubectl get nodes
+      
+      - name: Check if ingress controller already exists
+        id: check
+        run: |
+          if kubectl get namespace ingress-nginx &> /dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️  NGINX Ingress Controller already installed"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Ready to install NGINX Ingress Controller"
+          fi
+      
+      - name: Install NGINX Ingress Controller
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          echo "Installing NGINX Ingress Controller for DigitalOcean..."
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.5/deploy/static/provider/do/deploy.yaml
+          echo "✅ Installation started"
+      
+      - name: Wait for controller to be ready
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          echo "Waiting for ingress controller pods to be ready..."
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=120s || echo "⚠️  Timeout waiting for pods, but may still be starting"
+      
+      - name: Wait for LoadBalancer IP
+        run: |
+          echo "Waiting for LoadBalancer external IP to be assigned..."
+          for i in {1..60}; do
+            EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+              echo "✅ LoadBalancer IP assigned: $EXTERNAL_IP"
+              echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_ENV
+              break
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 5
+          done
+          
+          if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" == "null" ]; then
+            echo "⚠️  LoadBalancer IP not assigned yet. Check DigitalOcean console."
+          fi
+      
+      - name: Get ingress controller status
+        run: |
+          echo "=== NGINX Ingress Controller Status ==="
+          echo ""
+          echo "Pods:"
+          kubectl get pods -n ingress-nginx
+          echo ""
+          echo "Services:"
+          kubectl get svc -n ingress-nginx
+          echo ""
+          echo "IngressClass:"
+          kubectl get ingressclass
+      
+      - name: Display LoadBalancer information
+        run: |
+          EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          ENV="${{ github.event.inputs.environment }}"
+          
+          echo "=============================================="
+          echo "✅ NGINX Ingress Controller Installed!"
+          echo "=============================================="
+          echo ""
+          echo "Environment: $ENV"
+          echo "Namespace: ingress-nginx"
+          echo ""
+          if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+            echo "🌐 LoadBalancer External IP: $EXTERNAL_IP"
+            echo ""
+            echo "📋 Next Steps:"
+            echo "1. Update DNS records:"
+            
+            # Show environment-specific DNS
+            if [ "$ENV" == "prod" ]; then
+              echo "   *.ecombaker.com         A    $EXTERNAL_IP"
+              echo "   ecombaker.com           A    $EXTERNAL_IP"
+            elif [ "$ENV" == "qa" ]; then
+              echo "   *.qa.ecombaker.com      A    $EXTERNAL_IP"
+              echo "   qa.ecombaker.com        A    $EXTERNAL_IP"
+            else
+              echo "   *.dev.ecombaker.com     A    $EXTERNAL_IP"
+              echo "   dev.ecombaker.com       A    $EXTERNAL_IP"
+            fi
+            
+            echo ""
+            echo "2. Deploy your ingress resources:"
+            echo "   kubectl apply -k overlays/$ENV/"
+            echo ""
+            echo "3. Change application services from LoadBalancer to ClusterIP"
+            echo ""
+            echo "💰 Cost: ~\$12/month for this LoadBalancer"
+          else
+            echo "⚠️  LoadBalancer IP pending - check DigitalOcean console"
+          fi
+          echo "=============================================="
+      
+      - name: Cost warning
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          echo "⚠️  IMPORTANT: This creates a DigitalOcean LoadBalancer (~\$12/month)"
+          echo "To remove it: kubectl delete namespace ingress-nginx"
+
+  uninstall-ingress-controller:
+    name: Uninstall NGINX Ingress Controller
+    runs-on: ubuntu-latest
+    if: github.event.inputs.install_controller == 'false'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          if [ "${{ github.event.inputs.environment }}" == "dev" ]; then
+            echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "qa" ]; then
+            echo "${{ secrets.KUBE_CONFIG_QA }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "prod" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+      
+      - name: Verify cluster connection
+        run: |
+          kubectl cluster-info
+      
+      - name: Backup ingress resources
+        run: |
+          echo "Backing up all ingress resources..."
+          kubectl get ingress -A -o yaml > ingress-backup-$(date +%Y%m%d-%H%M%S).yaml 2>/dev/null || echo "No ingress resources found"
+      
+      - name: Get LoadBalancer IP before deletion
+        run: |
+          EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "N/A")
+          echo "LoadBalancer IP being released: $EXTERNAL_IP"
+      
+      - name: Uninstall NGINX Ingress Controller
+        run: |
+          echo "⚠️  Deleting NGINX Ingress Controller and LoadBalancer..."
+          if kubectl get namespace ingress-nginx &> /dev/null; then
+            kubectl delete namespace ingress-nginx
+            echo "✅ NGINX Ingress Controller deleted"
+            echo "💰 LoadBalancer cost savings: ~\$12/month"
+          else
+            echo "ℹ️  NGINX Ingress Controller not installed"
+          fi
+      
+      - name: Verify deletion
+        run: |
+          echo "Checking resources..."
+          kubectl get namespace ingress-nginx 2>&1 || echo "✅ Namespace deleted"
+          kubectl get svc -A | grep LoadBalancer || echo "No LoadBalancer services"
