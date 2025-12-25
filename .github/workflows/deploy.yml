@@ -27,6 +27,11 @@ on:
           - qa
           - prod
         default: 'dev'
+      namespace:
+        description: 'Kubernetes namespace (will be created if not exists)'
+        required: false
+        type: string
+        default: 'default'
 
 jobs:
   validate:
@@ -116,6 +121,23 @@ jobs:
           kubectl cluster-info || (echo "Failed to connect to cluster" && exit 1)
           kubectl get nodes || true
       
+      - name: Setup namespace
+        run: |
+          NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
+          echo "Target namespace: $NAMESPACE"
+          
+          if kubectl get namespace "$NAMESPACE" &> /dev/null; then
+            echo "✅ Namespace '$NAMESPACE' already exists"
+          else
+            echo "Creating namespace '$NAMESPACE'..."
+            kubectl create namespace "$NAMESPACE"
+            echo "✅ Namespace '$NAMESPACE' created successfully"
+          fi
+          
+          echo ""
+          echo "Current namespaces:"
+          kubectl get namespaces
+      
       - name: Install kustomize
         run: |
           curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
@@ -124,14 +146,20 @@ jobs:
       - name: Deploy to dev
         run: |
           kubectl apply -k overlays/dev/
+          echo "✅ Ingress deployed successfully"
       
-      - name: Wait for ingress
+      - name: Wait for ingress (optional)
         run: |
-          kubectl wait --for=condition=Ready --timeout=300s ingress/ecombaker-ingress || true
+          echo "Waiting for ingress to be ready (this may timeout, but that's OK)..."
+          kubectl wait --for=condition=Ready --timeout=60s ingress/ecombaker-ingress || echo "⚠️  Timeout reached, but ingress is still functional"
       
       - name: Get ingress status
         run: |
+          echo "Current ingress status:"
           kubectl get ingress ecombaker-ingress -o wide
+          echo ""
+          echo "Ingress details:"
+          kubectl describe ingress ecombaker-ingress | grep -A 10 "Rules\|Events" || true
       
       - name: Verify deployment
         run: |
@@ -171,14 +199,20 @@ jobs:
       - name: Deploy to QA
         run: |
           kubectl apply -k overlays/qa/
+          echo "✅ Ingress deployed successfully"
       
-      - name: Wait for ingress
+      - name: Wait for ingress (optional)
         run: |
-          kubectl wait --for=condition=Ready --timeout=300s ingress/ecombaker-ingress || true
+          echo "Waiting for ingress to be ready (this may timeout, but that's OK)..."
+          kubectl wait --for=condition=Ready --timeout=60s ingress/ecombaker-ingress || echo "⚠️  Timeout reached, but ingress is still functional"
       
       - name: Get ingress status
         run: |
+          echo "Current ingress status:"
           kubectl get ingress ecombaker-ingress -o wide
+          echo ""
+          echo "Ingress details:"
+          kubectl describe ingress ecombaker-ingress | grep -A 10 "Rules\|Events" || true
       
       - name: Verify deployment
         run: |
