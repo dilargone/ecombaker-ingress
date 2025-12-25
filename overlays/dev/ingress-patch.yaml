@@ -7,8 +7,8 @@ metadata:
     # cert-manager.io/cluster-issuer: "letsencrypt-staging"
     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
     nginx.ingress.kubernetes.io/limit-rps: ""  # Remove rate limiting in dev
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      add_header X-Environment "development" always;
+    # Configuration snippet disabled - snippets not allowed by ingress controller
+    # If you need custom headers, use ConfigMap or enable snippets in controller
 spec:
   # TLS disabled for now
   # tls:

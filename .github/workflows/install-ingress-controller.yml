@@ -22,6 +22,10 @@ on:
         required: false
         type: string
         default: 'ingress-nginx'
+      loadbalancer_ip:
+        description: 'LoadBalancer IP (optional - leave empty for auto-assign, or specify existing IP like 138.197.254.45)'
+        required: false
+        type: string
 
 jobs:
   install-ingress-controller:
@@ -66,7 +70,24 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           echo "Installing NGINX Ingress Controller for DigitalOcean..."
-          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.5/deploy/static/provider/do/deploy.yaml
+          
+          # Download the manifest
+          curl -sL https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.5/deploy/static/provider/do/deploy.yaml -o /tmp/ingress-nginx.yaml
+          
+          # If LoadBalancer IP is specified, patch the service
+          if [ -n "${{ github.event.inputs.loadbalancer_ip }}" ]; then
+            echo "📌 Configuring LoadBalancer to use IP: ${{ github.event.inputs.loadbalancer_ip }}"
+            
+            # Add loadBalancerIP to the service spec
+            cat /tmp/ingress-nginx.yaml | \
+              sed '/^  type: LoadBalancer$/a\  loadBalancerIP: ${{ github.event.inputs.loadbalancer_ip }}' > /tmp/ingress-nginx-patched.yaml
+            
+            kubectl apply -f /tmp/ingress-nginx-patched.yaml
+          else
+            echo "🔄 Auto-assigning new LoadBalancer IP..."
+            kubectl apply -f /tmp/ingress-nginx.yaml
+          fi
+          
           echo "✅ Installation started"
       
       - name: Wait for controller to be ready
@@ -113,6 +134,7 @@ jobs:
         run: |
           EXTERNAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
           ENV="${{ github.event.inputs.environment }}"
+          REQUESTED_IP="${{ github.event.inputs.loadbalancer_ip }}"
           
           echo "=============================================="
           echo "✅ NGINX Ingress Controller Installed!"
@@ -121,8 +143,21 @@ jobs:
           echo "Environment: $ENV"
           echo "Namespace: ingress-nginx"
           echo ""
+          
+          if [ -n "$REQUESTED_IP" ]; then
+            echo "📌 Requested LoadBalancer IP: $REQUESTED_IP"
+          fi
+          
           if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
             echo "🌐 LoadBalancer External IP: $EXTERNAL_IP"
+            
+            # Check if the IP matches what was requested
+            if [ -n "$REQUESTED_IP" ] && [ "$EXTERNAL_IP" == "$REQUESTED_IP" ]; then
+              echo "✅ Successfully bound to requested IP!"
+            elif [ -n "$REQUESTED_IP" ] && [ "$EXTERNAL_IP" != "$REQUESTED_IP" ]; then
+              echo "⚠️  Warning: Assigned IP doesn't match requested IP. This may indicate the requested IP was unavailable."
+            fi
+            
             echo ""
             echo "📋 Next Steps:"
             echo "1. Update DNS records:"
@@ -145,7 +180,12 @@ jobs:
             echo ""
             echo "3. Change application services from LoadBalancer to ClusterIP"
             echo ""
-            echo "💰 Cost: ~\$12/month for this LoadBalancer"
+            
+            if [ -n "$REQUESTED_IP" ]; then
+              echo "� Reusing existing LoadBalancer IP - no additional cost!"
+            else
+              echo "�💰 Cost: ~\$12/month for this LoadBalancer"
+            fi
           else
             echo "⚠️  LoadBalancer IP pending - check DigitalOcean console"
           fi
@@ -154,8 +194,16 @@ jobs:
       - name: Cost warning
         if: steps.check.outputs.exists == 'false'
         run: |
-          echo "⚠️  IMPORTANT: This creates a DigitalOcean LoadBalancer (~\$12/month)"
-          echo "To remove it: kubectl delete namespace ingress-nginx"
+          REQUESTED_IP="${{ github.event.inputs.loadbalancer_ip }}"
+          
+          if [ -n "$REQUESTED_IP" ]; then
+            echo "💡 Reusing existing LoadBalancer IP: $REQUESTED_IP"
+            echo "Make sure to delete the old service using this IP to avoid conflicts"
+          else
+            echo "⚠️  IMPORTANT: This creates a new DigitalOcean LoadBalancer (~\$12/month)"
+          fi
+          
+          echo "To remove ingress controller: kubectl delete namespace ingress-nginx"
 
   uninstall-ingress-controller:
     name: Uninstall NGINX Ingress Controller

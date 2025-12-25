@@ -7,8 +7,8 @@ metadata:
     # cert-manager.io/cluster-issuer: "letsencrypt-prod"
     nginx.ingress.kubernetes.io/cors-allow-origin: "http://*.qa.ecombaker.com"
     nginx.ingress.kubernetes.io/limit-rps: "200"
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      add_header X-Environment "qa" always;
+    # Configuration snippet disabled - snippets not allowed by ingress controller
+    # If you need custom headers, use ConfigMap or enable snippets in controller
 spec:
   # TLS disabled for now
   # tls:
