@@ -1,0 +1,109 @@
+name: Rollback LoadBalancer Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+      run_number:
+        description: 'Workflow run number with backup (e.g., 123)'
+        required: true
+        type: string
+      confirm_rollback:
+        description: 'Type "ROLLBACK" to confirm'
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    name: Rollback to Previous State
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_rollback }}" != "ROLLBACK" ]; then
+            echo "❌ Rollback cancelled - confirmation doesn't match"
+            echo "You entered: '${{ github.event.inputs.confirm_rollback }}'"
+            echo "Required: 'ROLLBACK'"
+            exit 1
+          fi
+      
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          if [ "${{ github.event.inputs.environment }}" == "dev" ]; then
+            echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "qa" ]; then
+            echo "${{ secrets.KUBE_CONFIG_QA }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "prod" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+      
+      - name: Download backup artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: service-backup-${{ github.event.inputs.run_number }}
+          run-id: ${{ github.event.inputs.run_number }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Display backup contents
+        run: |
+          echo "=== Backup Files Found ==="
+          ls -la backup-*.yaml
+          echo ""
+          echo "=== Backup Content ==="
+          cat backup-*.yaml
+      
+      - name: Delete ingress controller
+        run: |
+          echo "Deleting ingress controller..."
+          kubectl delete namespace ingress-nginx --timeout=120s || echo "⚠️ Namespace already deleted or timeout"
+          
+          echo "✅ Ingress controller removed"
+      
+      - name: Restore original service
+        run: |
+          echo "Restoring original LoadBalancer service..."
+          kubectl apply -f backup-*.yaml
+          
+          echo "✅ Service restored from backup"
+      
+      - name: Wait for LoadBalancer IP
+        run: |
+          BACKUP_FILE=$(ls backup-*.yaml | head -n 1)
+          SERVICE_NAME=$(grep "name:" $BACKUP_FILE | grep -v "namespace:" | head -n 1 | awk '{print $2}')
+          NAMESPACE=$(grep "namespace:" $BACKUP_FILE | head -n 1 | awk '{print $2}')
+          
+          echo "Waiting for LoadBalancer IP for service: $SERVICE_NAME in namespace: $NAMESPACE"
+          
+          for i in {1..60}; do
+            IP=$(kubectl get svc "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            
+            if [ -n "$IP" ] && [ "$IP" != "null" ]; then
+              echo "✅ LoadBalancer IP assigned: $IP"
+              break
+            fi
+            
+            echo "Waiting... ($i/60)"
+            sleep 5
+          done
+      
+      - name: Display rollback results
+        run: |
+          echo "=============================================="
+          echo "✅ ROLLBACK COMPLETED"
+          echo "=============================================="
+          echo ""
+          echo "The system has been restored to its previous state."
+          echo "Please verify your application is working correctly."
+          echo ""
+          kubectl get svc -A | grep LoadBalancer
+          echo ""
+          echo "=============================================="
