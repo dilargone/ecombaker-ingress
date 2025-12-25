@@ -1,0 +1,366 @@
+name: Migrate LoadBalancer to Ingress (Safe)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to migrate'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - prod
+      existing_loadbalancer_ip:
+        description: 'Existing LoadBalancer IP to preserve (REQUIRED - e.g., 138.197.254.45)'
+        required: true
+        type: string
+      existing_service_name:
+        description: 'Name of existing LoadBalancer service to migrate'
+        required: true
+        type: string
+        default: 'springboot-app-service-qa'
+      existing_namespace:
+        description: 'Namespace of existing service'
+        required: true
+        type: string
+        default: 'default'
+      confirm_migration:
+        description: 'Type "MIGRATE" to confirm you understand this will briefly interrupt traffic'
+        required: true
+        type: string
+
+jobs:
+  validate:
+    name: Pre-flight Validation
+    runs-on: ubuntu-latest
+    outputs:
+      can_proceed: ${{ steps.validate.outputs.can_proceed }}
+      backup_created: ${{ steps.backup.outputs.backup_created }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Validate confirmation
+        id: confirm
+        run: |
+          if [ "${{ github.event.inputs.confirm_migration }}" != "MIGRATE" ]; then
+            echo "❌ Migration cancelled - confirmation string doesn't match"
+            echo "You entered: '${{ github.event.inputs.confirm_migration }}'"
+            echo "Required: 'MIGRATE'"
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+      
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          if [ "${{ github.event.inputs.environment }}" == "dev" ]; then
+            echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "qa" ]; then
+            echo "${{ secrets.KUBE_CONFIG_QA }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "prod" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+      
+      - name: Validate existing service
+        id: validate
+        run: |
+          SERVICE="${{ github.event.inputs.existing_service_name }}"
+          NAMESPACE="${{ github.event.inputs.existing_namespace }}"
+          EXPECTED_IP="${{ github.event.inputs.existing_loadbalancer_ip }}"
+          
+          echo "=== Validating Existing Service ==="
+          
+          # Check if service exists
+          if ! kubectl get svc "$SERVICE" -n "$NAMESPACE" &>/dev/null; then
+            echo "❌ ERROR: Service '$SERVICE' not found in namespace '$NAMESPACE'"
+            exit 1
+          fi
+          
+          # Check if it's a LoadBalancer
+          TYPE=$(kubectl get svc "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.type}')
+          if [ "$TYPE" != "LoadBalancer" ]; then
+            echo "❌ ERROR: Service '$SERVICE' is type '$TYPE', not LoadBalancer"
+            exit 1
+          fi
+          
+          # Get actual IP
+          ACTUAL_IP=$(kubectl get svc "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          
+          echo "Expected IP: $EXPECTED_IP"
+          echo "Actual IP:   $ACTUAL_IP"
+          
+          # Validate IP matches
+          if [ "$ACTUAL_IP" != "$EXPECTED_IP" ]; then
+            echo "❌ ERROR: IP mismatch!"
+            echo "The service has IP: $ACTUAL_IP"
+            echo "You specified IP: $EXPECTED_IP"
+            echo "Please correct the input or check if you're targeting the right service."
+            exit 1
+          fi
+          
+          echo "✅ Validation passed - service exists with correct IP"
+          echo "can_proceed=true" >> $GITHUB_OUTPUT
+      
+      - name: Create backup of existing service
+        id: backup
+        run: |
+          SERVICE="${{ github.event.inputs.existing_service_name }}"
+          NAMESPACE="${{ github.event.inputs.existing_namespace }}"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          BACKUP_FILE="backup-${SERVICE}-${TIMESTAMP}.yaml"
+          
+          echo "=== Creating Backup ==="
+          kubectl get svc "$SERVICE" -n "$NAMESPACE" -o yaml > "$BACKUP_FILE"
+          
+          echo "✅ Backup created: $BACKUP_FILE"
+          cat "$BACKUP_FILE"
+          
+          echo "backup_created=true" >> $GITHUB_OUTPUT
+          echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
+      
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-backup-${{ github.run_number }}
+          path: backup-*.yaml
+          retention-days: 90
+
+  migrate:
+    name: Execute Migration
+    runs-on: ubuntu-latest
+    needs: validate
+    if: needs.validate.outputs.can_proceed == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          if [ "${{ github.event.inputs.environment }}" == "dev" ]; then
+            echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "qa" ]; then
+            echo "${{ secrets.KUBE_CONFIG_QA }}" | base64 -d > ~/.kube/config
+          elif [ "${{ github.event.inputs.environment }}" == "prod" ]; then
+            echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+      
+      - name: Check if ingress controller exists
+        id: check_ingress
+        run: |
+          if kubectl get svc -n ingress-nginx ingress-nginx-controller &>/dev/null; then
+            CURRENT_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            echo "⚠️  Ingress controller already exists with IP: $CURRENT_IP"
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "current_ip=$CURRENT_IP" >> $GITHUB_OUTPUT
+          else
+            echo "✅ No ingress controller found - ready for fresh installation"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Display migration plan
+        run: |
+          echo "=============================================="
+          echo "🔄 MIGRATION PLAN"
+          echo "=============================================="
+          echo ""
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Preserving IP: ${{ github.event.inputs.existing_loadbalancer_ip }}"
+          echo ""
+          echo "Step 1: Install ingress controller with IP reservation"
+          echo "Step 2: Wait for ingress controller to be ready"
+          echo "Step 3: Safely delete old LoadBalancer service"
+          echo "Step 4: Deploy ingress resources"
+          echo "Step 5: Verify traffic routing"
+          echo ""
+          echo "⏱️  Expected downtime: ~30-60 seconds"
+          echo "=============================================="
+      
+      - name: Install ingress controller with preserved IP
+        run: |
+          PRESERVED_IP="${{ github.event.inputs.existing_loadbalancer_ip }}"
+          
+          echo "🔧 Installing NGINX Ingress Controller with IP: $PRESERVED_IP"
+          
+          # Download the manifest
+          curl -sL https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.5/deploy/static/provider/do/deploy.yaml > /tmp/ingress-nginx.yaml
+          
+          # Apply everything first
+          kubectl apply -f /tmp/ingress-nginx.yaml
+          
+          echo "✅ Base components installed"
+      
+      - name: Wait for controller pods to be ready
+        run: |
+          echo "⏳ Waiting for controller pods..."
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=180s || echo "⚠️ Pods not ready yet, continuing..."
+          
+          echo "✅ Controller pods ready"
+      
+      - name: Delete old service and apply new one atomically
+        run: |
+          SERVICE="${{ github.event.inputs.existing_service_name }}"
+          NAMESPACE="${{ github.event.inputs.existing_namespace }}"
+          PRESERVED_IP="${{ github.event.inputs.existing_loadbalancer_ip }}"
+          
+          echo "⚠️  CRITICAL STEP: Atomic service swap"
+          echo "Deleting old service: $SERVICE in namespace $NAMESPACE"
+          
+          # Delete old service first
+          kubectl delete svc "$SERVICE" -n "$NAMESPACE" --wait=false
+          
+          # Delete the auto-created ingress service
+          kubectl delete svc ingress-nginx-controller -n ingress-nginx --ignore-not-found=true --wait=false
+          
+          sleep 3
+          
+          # Create new service with preserved IP
+          cat <<'EOFSERVICE' | PRESERVED_IP="$PRESERVED_IP" envsubst | kubectl apply -f -
+          apiVersion: v1
+          kind: Service
+          metadata:
+            annotations:
+              service.beta.kubernetes.io/do-loadbalancer-enable-proxy-protocol: "true"
+            labels:
+              app.kubernetes.io/component: controller
+              app.kubernetes.io/instance: ingress-nginx
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+              app.kubernetes.io/version: 1.9.5
+            name: ingress-nginx-controller
+            namespace: ingress-nginx
+          spec:
+            externalTrafficPolicy: Local
+            ipFamilies:
+            - IPv4
+            ipFamilyPolicy: SingleStack
+            loadBalancerIP: ${PRESERVED_IP}
+            ports:
+            - appProtocol: http
+              name: http
+              port: 80
+              protocol: TCP
+              targetPort: http
+            - appProtocol: https
+              name: https
+              port: 443
+              protocol: TCP
+              targetPort: https
+            selector:
+              app.kubernetes.io/component: controller
+              app.kubernetes.io/instance: ingress-nginx
+              app.kubernetes.io/name: ingress-nginx
+            type: LoadBalancer
+          EOFSERVICE
+          
+          echo "✅ Service swap completed"
+      
+      - name: Wait for LoadBalancer IP assignment
+        id: wait_ip
+        run: |
+          EXPECTED_IP="${{ github.event.inputs.existing_loadbalancer_ip }}"
+          
+          echo "⏳ Waiting for LoadBalancer IP: $EXPECTED_IP"
+          
+          for i in {1..60}; do
+            ACTUAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            
+            if [ -n "$ACTUAL_IP" ] && [ "$ACTUAL_IP" != "null" ]; then
+              echo "Got IP: $ACTUAL_IP"
+              
+              if [ "$ACTUAL_IP" == "$EXPECTED_IP" ]; then
+                echo "✅ SUCCESS! LoadBalancer got the correct IP: $EXPECTED_IP"
+                echo "success=true" >> $GITHUB_OUTPUT
+                exit 0
+              else
+                echo "❌ ERROR! LoadBalancer got WRONG IP: $ACTUAL_IP"
+                echo "Expected: $EXPECTED_IP"
+                echo "success=false" >> $GITHUB_OUTPUT
+                exit 1
+              fi
+            fi
+            
+            echo "Waiting... ($i/60)"
+            sleep 5
+          done
+          
+          echo "❌ Timeout waiting for LoadBalancer IP"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+      
+      - name: Deploy ingress resources
+        if: steps.wait_ip.outputs.success == 'true'
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          NAMESPACE="ecombaker-${ENV}-namespace"
+          
+          echo "Deploying ingress resources to namespace: $NAMESPACE"
+          kubectl kustomize overlays/$ENV/ | kubectl apply -n "$NAMESPACE" -f -
+          
+          echo "✅ Ingress resources deployed"
+      
+      - name: Verify ingress configuration
+        if: steps.wait_ip.outputs.success == 'true'
+        run: |
+          ENV="${{ github.event.inputs.environment }}"
+          NAMESPACE="ecombaker-${ENV}-namespace"
+          
+          echo "=== Ingress Status ==="
+          kubectl get ingress -n "$NAMESPACE"
+          
+          echo ""
+          echo "=== Controller Status ==="
+          kubectl get pods -n ingress-nginx
+          kubectl get svc -n ingress-nginx
+      
+      - name: Display migration results
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "🎉 MIGRATION RESULTS"
+          echo "=============================================="
+          echo ""
+          
+          ACTUAL_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
+          EXPECTED_IP="${{ github.event.inputs.existing_loadbalancer_ip }}"
+          
+          echo "Expected IP: $EXPECTED_IP"
+          echo "Actual IP:   $ACTUAL_IP"
+          echo ""
+          
+          if [ "$ACTUAL_IP" == "$EXPECTED_IP" ]; then
+            echo "✅ SUCCESS! IP preserved successfully"
+            echo "✅ No DNS changes needed"
+            echo "✅ Traffic should be flowing through ingress now"
+          else
+            echo "❌ FAILED! IP not preserved"
+            echo "⚠️  You may need to update DNS to: $ACTUAL_IP"
+            echo "⚠️  Or rollback using the backup artifact"
+          fi
+          
+          echo ""
+          echo "📦 Backup artifact saved in this workflow run"
+          echo "=============================================="
+      
+      - name: Rollback instructions
+        if: failure()
+        run: |
+          echo "=============================================="
+          echo "🔄 ROLLBACK INSTRUCTIONS"
+          echo "=============================================="
+          echo ""
+          echo "If migration failed, you can restore the backup:"
+          echo ""
+          echo "1. Download the backup artifact from this workflow run"
+          echo "2. Apply it: kubectl apply -f backup-*.yaml"
+          echo "3. Delete ingress controller: kubectl delete namespace ingress-nginx"
+          echo ""
+          echo "Or use the GitHub Action: 'Rollback LoadBalancer Migration'"
+          echo "=============================================="
