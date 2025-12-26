@@ -1,0 +1,104 @@
+name: Fix NGINX Ingress Proxy Protocol
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_proxy_protocol:
+        description: 'Enable PROXY protocol (true/false)'
+        required: true
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+        default: 'false'
+
+jobs:
+  fix-proxy-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Display configuration info
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔧 NGINX INGRESS PROXY PROTOCOL CONFIGURATION"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Setting use-proxy-protocol: ${{ github.event.inputs.enable_proxy_protocol }}"
+          echo "Cluster: ${{ secrets.DO_CLUSTER_NAME }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Configure kubectl
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DO_CLUSTER_NAME }}
+          kubectl version --client
+
+      - name: Check current ingress controller configuration
+        run: |
+          echo "=== Current ConfigMap settings ==="
+          kubectl get configmap ingress-nginx-controller -n ingress-nginx -o yaml | grep -A 10 "data:"
+
+      - name: Update PROXY protocol setting
+        run: |
+          echo "Patching ConfigMap to set use-proxy-protocol=${{ github.event.inputs.enable_proxy_protocol }}"
+          kubectl patch configmap ingress-nginx-controller -n ingress-nginx \
+            --type merge \
+            -p '{"data":{"use-proxy-protocol":"${{ github.event.inputs.enable_proxy_protocol }}"}}'
+
+      - name: Verify configuration update
+        run: |
+          echo "=== Updated ConfigMap settings ==="
+          kubectl get configmap ingress-nginx-controller -n ingress-nginx -o yaml | grep -A 10 "data:"
+
+      - name: Restart ingress controller
+        run: |
+          echo "Restarting NGINX ingress controller to apply changes..."
+          kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx
+
+      - name: Wait for rollout to complete
+        run: |
+          echo "Waiting for ingress controller to be ready..."
+          kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx --timeout=3m
+
+      - name: Verify ingress controller is running
+        run: |
+          echo "=== Ingress Controller Pod Status ==="
+          kubectl get pods -n ingress-nginx -l app.kubernetes.io/component=controller
+          
+          echo ""
+          echo "=== Ingress Controller Service ==="
+          kubectl get svc -n ingress-nginx ingress-nginx-controller
+
+      - name: Test ingress connectivity
+        run: |
+          echo "=== Testing ingress connectivity ==="
+          INGRESS_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Ingress LoadBalancer IP: $INGRESS_IP"
+          
+          echo ""
+          echo "Testing QA ingress..."
+          curl -v -H "Host: store1.qa.ecombaker.com" http://$INGRESS_IP/swagger-ui/index.html 2>&1 | head -20 || true
+          
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Configuration applied successfully!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "PROXY protocol: ${{ github.event.inputs.enable_proxy_protocol }}"
+          echo "Ingress IP: $INGRESS_IP"
+          echo ""
+          echo "Test URLs:"
+          echo "  - http://store1.qa.ecombaker.com/swagger-ui/"
+          echo "  - http://store1.qa.ecombaker.com/actuator/health"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      - name: Check for errors in ingress logs
+        if: always()
+        run: |
+          echo "=== Recent ingress controller logs (last 50 lines) ==="
+          kubectl logs -n ingress-nginx deployment/ingress-nginx-controller --tail=50 | grep -v "pilot-frontend" || true
