@@ -195,7 +195,7 @@ jobs:
       
       - name: Setup namespace
         run: |
-          NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
+          NAMESPACE="ecombaker-qa-namespace"
           echo "Target namespace: $NAMESPACE"
           
           if kubectl get namespace "$NAMESPACE" &> /dev/null; then
@@ -212,23 +212,23 @@ jobs:
       
       - name: Deploy to QA
         run: |
-          NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
+          NAMESPACE="ecombaker-qa-namespace"
           echo "Deploying to namespace: $NAMESPACE"
           
-          # Build the manifest and apply with namespace override
+          # Namespace is set in overlays/qa/kustomization.yaml — pass it here too for safety
           kubectl kustomize overlays/qa/ | kubectl apply -n "$NAMESPACE" -f -
           
           echo "✅ Ingress deployed successfully to namespace: $NAMESPACE"
       
       - name: Wait for ingress (optional)
         run: |
-          NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
+          NAMESPACE="ecombaker-qa-namespace"
           echo "Waiting for ingress to be ready (this may timeout, but that's OK)..."
           kubectl wait --for=condition=Ready --timeout=60s ingress/ecombaker-ingress -n "$NAMESPACE" || echo "⚠️  Timeout reached, but ingress is still functional"
       
       - name: Get ingress status
         run: |
-          NAMESPACE="${{ github.event.inputs.namespace || 'default' }}"
+          NAMESPACE="ecombaker-qa-namespace"
           echo "Current ingress status in namespace: $NAMESPACE"
           kubectl get ingress ecombaker-ingress -n "$NAMESPACE" -o wide
           echo ""
