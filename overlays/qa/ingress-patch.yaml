@@ -5,7 +5,7 @@ metadata:
   annotations:
     # SSL/TLS disabled for now - will be configured later
     # cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/cors-allow-origin: "http://*.qa.ecombaker.com"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "http://*.qa.ecombaker.com,http://*.stage.ecombaker.com"
     nginx.ingress.kubernetes.io/limit-rps: "200"
     # Configuration snippet disabled - snippets not allowed by ingress controller
     # If you need custom headers, use ConfigMap or enable snippets in controller
@@ -57,6 +57,39 @@ spec:
             name: pilot-service-qa
             port:
               number: 8080
+  # Stage environment — *.stage.ecombaker.com (two levels deep, needs explicit rule)
+  - host: "*.stage.ecombaker.com"
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service-qa
+            port:
+              number: 8080
+      - path: /actuator
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service-qa
+            port:
+              number: 8080
+      - path: /swagger-ui
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service-qa
+            port:
+              number: 8080
+      - path: /v3/api-docs
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service-qa
+            port:
+              number: 8080
+
   - host: qa.ecombaker.com
     http:
       paths:

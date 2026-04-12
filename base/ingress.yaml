@@ -73,6 +73,39 @@ spec:
             port:
               number: 8080
   
+  # Stage subdomain rule — *.stage.ecombaker.com (two levels deep, not matched by *.ecombaker.com)
+  - host: "*.stage.ecombaker.com"
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      - path: /actuator
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      - path: /swagger-ui
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+      - path: /v3/api-docs
+        pathType: Prefix
+        backend:
+          service:
+            name: pilot-service
+            port:
+              number: 8080
+
   # Base domain rule (for www or root domain)
   - host: ecombaker.com
     http:
